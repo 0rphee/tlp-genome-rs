@@ -1,7 +1,7 @@
-#File1.fasta,68,2
+#uniprot_sprot_varsplic.fasta,5,2
 
-The sun was setting over the quiet town, casting long shadows across the empty streets. Birds chirped softly in the distance, their songs blending with the rustling of leaves in the gentle breeze. A lone cat wandered down the sidewalk, its tail swaying as it explored the familiar surroundings. The air was cool, carrying the faint scent of blooming flowers from nearby gardens.
+The sun was setting over the quiet town, casting long shadows across the empty streets. Birds chirped softly in the distance; their songs blended with the rustling of leaves in the gentle breeze. A lone cat wandered down the sidewalk-its tail swaying as it explored the familiar surroundings. The air was cool, carrying the faint scent of blooming flowers from nearby gardens.
 
-In the park, children laughed and played, their voices echoing through the open space. A group of friends sat on a bench, sharing stories and enjoying the peaceful evening. Nearby, an old man fed breadcrumbs to a flock of pigeons, his face lit with a warm smile. The scene was simple yet full of life, a reminder of the beauty in everyday moments.
+In the park, children laughed and played-their voices echoing through the open space. A group of friends sat on a bench, sharing stories and enjoying the peaceful evening. Nearby, an old man fed breadcrumbs to a flock of pigeons; his face lit with a warm smile. The scene was simple, yet full of life-a reminder of the beauty in everyday moments.
 
-As night began to fall, the town slowly grew quieter. Streetlights flickered on, illuminating the paths for those still out for an evening stroll. Through the windows of homes, the soft glow of lamps could be seen, signaling the end of another day. The world seemed to pause, if only for a moment, as the town embraced the calm of the night.
+As night began to fall, the town slowly grew quieter. Streetlights flickered on, illuminating the paths for those still out for an evening stroll. Through the windows of homes, the soft glow of lamps could be seen-signaling the end of another day. The world seemed to pause-if only for a moment-as the town embraced the calm of the night.

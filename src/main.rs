@@ -69,120 +69,136 @@ struct KeyFileData {
     max_attempts: u16,
 }
 
+enum AttemptsResult {
+    MaxReached,
+    NotReached,
+}
+
 impl<'a> KeyFileData {
-    fn new(
-        key_path: PathBuf,
-        first_offset: u16,
-        max_attempts: u16,
-        line_index: usize,
-    ) -> KeyFileData {
-        let k = KeyFileData {
-            key_path,
-            first_offset,
-            max_attempts,
-            line_index,
-        };
-        println!("keyfiledata: {:?}", k);
-        return k;
-    }
-    fn fill_alpha_arr(&self, alpha_arr: &mut [u8; 26]) {
-        let bytes = fs::read(&self.key_path).unwrap();
-        let mut attempt_count = 0;
-        let mut second_offset = 0;
-        {
-            let mut current_offset_left1 = self.first_offset;
-            let mut in_header = false;
-            loop {
-                for byte in bytes.iter() {
-                    match byte {
-                        b'>' => {
-                            in_header = true;
-                            current_offset_left1 -= 1;
-                        }
-                        b'\n' => in_header = false,
-                        _ => {
-                            if in_header {
-                                if current_offset_left1 == 0 {
-                                    second_offset = *byte;
-                                    break;
+    fn fill_alpha_arr(&self, alpha_arr: &mut [u8; 26]) -> AttemptsResult {
+        fn get_second_offset(
+            first_offset: u16,
+            attempt_count: &mut u16,
+            max_attempts: u16,
+            bytes: &[u8],
+        ) -> Option<u8> {
+            {
+                let mut current_offset_left = first_offset;
+                let mut in_header = false;
+                loop {
+                    for byte in bytes.iter() {
+                        match byte {
+                            b'>' => {
+                                in_header = true;
+                                current_offset_left -= 1;
+                            }
+                            b'\n' => in_header = false,
+                            _ => {
+                                if in_header {
+                                    if current_offset_left == 0 {
+                                        return Some(*byte);
+                                    }
+                                    current_offset_left -= 1
                                 }
-                                current_offset_left1 -= 1
                             }
                         }
                     }
-                }
-                if second_offset != 0 {
-                    break;
-                } else {
-                    attempt_count += 1;
-                    if attempt_count >= self.max_attempts {
-                        eprintln!("Max attempts reached, cannot encrypt.");
-                        process::exit(1);
+                    if current_offset_left > 0 {
+                        *attempt_count += 1;
+                        if *attempt_count >= max_attempts {
+                            eprintln!("Max attempts reached {}, cannot encrypt.", max_attempts);
+                            process::exit(1);
+                        }
                     }
                 }
             }
         }
-        // find array mappings
-        // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
-        let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
-        // alpha_arr
-        let mut arr_index = 0;
-        {
-            let mut current_offset_left2 = second_offset;
-            let mut in_header = false;
-            loop {
-                for byte in bytes.iter() {
-                    match byte {
-                        b'>' => in_header = true,
-                        b'\n' => in_header = false,
-                        b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
-                            current_offset_left2 = second_offset;
-                        }
-                        _ => {
-                            if in_header {
-                                continue;
-                            };
-                            if current_offset_left2 == 0 {
-                                if already_used_values.contains(byte) {
-                                    current_offset_left2 = second_offset;
-                                    continue;
-                                }
-                                already_used_values.insert(*byte);
-                                alpha_arr[arr_index] = *byte;
-                                arr_index += 1;
-                                match arr_index {
-                                    1 | 9 | 14 | 20 | 23 => arr_index += 1,
-                                    25 => {
-                                        println!("finished alpha_arr");
-                                        break;
-                                    }
-                                    _ => (),
-                                }
+        fn mutate_alpha_array(
+            second_offset: u8,
+            max_attempts: u16,
+            bytes: &[u8],
+            alpha_arr: &mut [u8; 26],
+            attempt_count: &mut u16,
+        ) -> AttemptsResult {
+            // find array mappings
+            // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
+            let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
+            let mut next_item_alpha_arr_index = 0;
+            {
+                let mut current_offset_left2 = second_offset;
+                let mut in_header = false;
+                loop {
+                    for byte in bytes.iter() {
+                        match byte {
+                            b'>' => in_header = true,
+                            b'\n' => in_header = false,
+                            b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
                                 current_offset_left2 = second_offset;
                             }
-                            current_offset_left2 -= 1
+                            _ => {
+                                if in_header {
+                                    continue;
+                                };
+                                if current_offset_left2 == 0 {
+                                    if already_used_values.contains(byte) {
+                                        current_offset_left2 = second_offset;
+                                        continue;
+                                    }
+                                    already_used_values.insert(*byte);
+                                    alpha_arr[next_item_alpha_arr_index] = *byte;
+                                    next_item_alpha_arr_index += 1;
+                                    match next_item_alpha_arr_index {
+                                        1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
+                                        25 => break,
+                                        _ => (),
+                                    }
+                                    current_offset_left2 = second_offset;
+                                }
+                                current_offset_left2 -= 1
+                            }
                         }
                     }
-                }
-                if already_used_values.len() == 20 {
-                    break;
-                } else {
-                    attempt_count += 1;
-                    if attempt_count >= self.max_attempts {
-                        eprintln!("Max attempts reached, cannot encrypt.");
-                        process::exit(1);
+                    if already_used_values.len() == 20 {
+                        return AttemptsResult::NotReached;
+                    } else {
+                        *attempt_count += 1;
+                        if *attempt_count >= max_attempts {
+                            return AttemptsResult::MaxReached;
+                        }
                     }
                 }
             }
         }
-        // debug
-        // let char_vec: Vec<_> = alpha_arr
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, v)| (i, char::from(*v)))
-        //     .collect();
-        // println!("Arr filled: {:?}", char_vec);
-        // todo!();
+        // function body
+        let mut attempt_count = 0;
+        let bytes = fs::read(&self.key_path).unwrap();
+        let second_offset = match get_second_offset(
+            self.first_offset,
+            &mut attempt_count,
+            self.max_attempts,
+            &bytes,
+        ) {
+            Some(v) => v,
+            None => return AttemptsResult::MaxReached,
+        };
+
+        let max_attempts_reached = mutate_alpha_array(
+            second_offset,
+            self.max_attempts,
+            &bytes,
+            alpha_arr,
+            &mut attempt_count,
+        );
+        #[cfg(debug_assertions)]
+        {
+            let char_vec: Vec<_> = alpha_arr
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i, char::from(*v)))
+                .collect();
+            println!("Arr filled: {:?}", char_vec);
+        }
+        return max_attempts_reached;
     }
 }
 
@@ -192,37 +208,50 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             eprintln!("Failed to write to file: {}", err);
             process::exit(1);
         }
+        #[cfg(debug_assertions)]
         println!("written line: {}", line);
     }
     let mut alpha_arr: [u8; 26] = DEFAULT_ALPHA_ARR;
     let mut keyfile_vec: Vec<_> = Vec::new();
 
-    // Create a new file to write the modified content
+    // Create .mod file (uppercase & without punctuation)
     let mod_filepath = source_filepath.with_extension("mod");
-    let mod_file = match File::create(&mod_filepath) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("Failed to create output file: {}", err);
-            process::exit(1);
-        }
-    };
+    let mod_file = File::create(&mod_filepath).unwrap_or_else(|err| {
+        eprintln!("Failed to create output file: {}", err);
+        process::exit(1);
+    });
     let mut mod_writer = BufWriter::new(mod_file);
+
+    // Create .cod file (substituded letters from array)
+    let cod_filepath = source_filepath.with_extension("cod");
+    let cod_file = File::create(&cod_filepath).unwrap_or_else(|err| {
+        eprintln!("Failed to create output file: {}", err);
+        process::exit(1);
+    });
+    let mut cod_writer = BufWriter::new(cod_file);
 
     let lines = bytes.lines().map(|v| v.trim());
     for (lnum, line) in lines.enumerate() {
         if line.starts_with("#") {
             let splt: Vec<_> = line.splitn(3, ',').collect();
             let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
-            println!("key_path {:?}", key_path);
-            let key = KeyFileData::new(
+
+            let key = KeyFileData {
                 key_path,
-                splt[1].parse().unwrap(),
-                splt[2].parse().unwrap(),
-                lnum,
-            );
-            key.fill_alpha_arr(&mut alpha_arr);
+                first_offset: splt[1].parse().unwrap(),
+                max_attempts: splt[2].parse().unwrap(),
+                line_index: lnum,
+            };
+            #[cfg(debug_assertions)]
+            println!("{:?}", key);
+
+            if let AttemptsResult::MaxReached = key.fill_alpha_arr(&mut alpha_arr) {
+                eprintln!("Max attempts reached, cannot encrypt.");
+                process::exit(1);
+            }
             keyfile_vec.push(key);
             writer_helper(&mut mod_writer, line);
+            writer_helper(&mut cod_writer, line);
         } else {
             let upper: String = line
                 .chars()
@@ -234,7 +263,19 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
                     }
                 })
                 .collect();
+            let codified: String = upper
+                .bytes()
+                .map(|byte| -> char {
+                    if byte == b' ' {
+                        byte.into()
+                    } else {
+                        // we assume every byte now is an ascii letter
+                        alpha_arr[(byte - b'A') as usize].into()
+                    }
+                })
+                .collect();
             writer_helper(&mut mod_writer, &upper);
+            writer_helper(&mut cod_writer, &codified);
         }
     }
     // Flush buffer to ensure all data is written to the file

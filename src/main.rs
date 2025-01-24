@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Instant;
@@ -65,7 +65,6 @@ static DEFAULT_ALPHA_ARR: [u8; 26] = [
 struct KeyFileData {
     first_offset: u16,
     key_path: PathBuf,
-    line_index: usize,
     max_attempts: u16,
 }
 
@@ -231,7 +230,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     let mut cod_writer = BufWriter::new(cod_file);
 
     let lines = bytes.lines().map(|v| v.trim());
-    for (lnum, line) in lines.enumerate() {
+    for line in lines {
         if line.starts_with("#") {
             let splt: Vec<_> = line.splitn(3, ',').collect();
             let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
@@ -240,7 +239,6 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
                 key_path,
                 first_offset: splt[1].parse().unwrap(),
                 max_attempts: splt[2].parse().unwrap(),
-                line_index: lnum,
             };
             #[cfg(debug_assertions)]
             println!("{:?}", key);
@@ -283,27 +281,4 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
         eprintln!("Failed to flush buffer: {}", err);
         process::exit(1);
     }
-
-    // // Reopen the modified file for reading
-    // let mod_file = match File::open(&mod_filepath) {
-    //     Ok(file) => file,
-    //     Err(err) => {
-    //         eprintln!("Failed to open modified file for reading: {}", err);
-    //         process::exit(1);
-    //     }
-    // };
-    // let mod_reader = BufReader::new(mod_file);
-
-    // // Read the modified file line by line
-    // for line in mod_reader.lines() {
-    //     match line {
-    //         Ok(_line) => {
-    //             println!("Read from modified file: {}", _line)
-    //         }
-    //         Err(err) => {
-    //             eprintln!("Failed to read line from modified file: {}", err);
-    //             process::exit(1);
-    //         }
-    //     }
-    // }
 }

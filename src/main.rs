@@ -68,6 +68,7 @@ struct KeyFileData {
     max_attempts: u16,
 }
 
+#[derive(Debug)]
 enum AttemptsResult {
     MaxReached,
     NotReached,
@@ -120,8 +121,14 @@ impl<'a> KeyFileData {
             attempt_count: &mut u16,
         ) -> AttemptsResult {
             // find array mappings
+
+            if alpha_arr[0] != 0 {
+                // need to reset the values of the array
+                alpha_arr.copy_from_slice(DEFAULT_ALPHA_ARR.as_slice());
+            }
             // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
-            let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
+            // let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
+            let mut count = 0;
             let mut next_item_alpha_arr_index = 0;
             {
                 let mut current_offset_left2 = second_offset;
@@ -139,11 +146,13 @@ impl<'a> KeyFileData {
                                     continue;
                                 };
                                 if current_offset_left2 == 0 {
-                                    if already_used_values.contains(byte) {
+                                    // if already_used_values.contains(byte) {
+                                    if alpha_arr.contains(byte) {
                                         current_offset_left2 = second_offset;
                                         continue;
                                     }
-                                    already_used_values.insert(*byte);
+                                    count += 1;
+                                    // already_used_values.insert(*byte);
                                     alpha_arr[next_item_alpha_arr_index] = *byte;
                                     next_item_alpha_arr_index += 1;
                                     match next_item_alpha_arr_index {
@@ -157,7 +166,8 @@ impl<'a> KeyFileData {
                             }
                         }
                     }
-                    if already_used_values.len() == 20 {
+                    // if already_used_values.len() == 20 {
+                    if count == 20 {
                         return AttemptsResult::NotReached;
                     } else {
                         *attempt_count += 1;

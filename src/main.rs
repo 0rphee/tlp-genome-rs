@@ -1,10 +1,12 @@
+use core::panic;
 use std::collections::HashSet;
-use std::env;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
+use std::mem::{transmute, MaybeUninit};
 use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Instant;
+use std::{env, io};
 
 fn main() -> () {
     let start_time: Instant = Instant::now();
@@ -74,39 +76,141 @@ enum AttemptsResult {
     NotReached,
 }
 
+struct ChunkReader {
+    bytes_buff: Vec<u8>,
+    file: File,
+    file_size: u64,
+    file_read_bytes: usize,
+}
+
+/*
+1. reader creation: initial read of x KB
+2. the user reads through the initial read bytes
+3. when the initial part of the file is finished, another batch of x KB (or the rest of the file if the rest is less than x KB)
+4. repeat, until all the file is finished.
+*/
+
+impl ChunkReader {
+    // max ascii value in '>' lines in *.fasta files: 124
+    //   see: test.py, run against any *.fasta file
+    //   ex. 'python3 test.py data/uniprot_sprot_varsplic.fasta'
+    // chunk size used when reading a file into memory in parts
+    // 1024 bytes = 1 KB
+    // 124*25 = 3,100; 3100 / 1024
+    const CHUNK_SIZE: usize = 10 * 1024;
+    fn new(file: File) -> ChunkReader {
+        let file_size = file.metadata().expect("File size").len();
+        let mut reader = ChunkReader {
+            bytes_buff: Vec::with_capacity(0),
+            file,
+            file_size,
+            file_read_bytes: 0,
+        };
+        reader.load_next_chunk().expect("Read bytes");
+        return reader;
+    }
+
+    fn load_next_chunk(&mut self) -> io::Result<usize> /* bytes loaded */ {
+        let rest_of_file_size = self.file_size as usize - self.file_read_bytes;
+        let next_chunk_size = if rest_of_file_size > Self::CHUNK_SIZE {
+            Self::CHUNK_SIZE
+        } else {
+            rest_of_file_size
+        };
+
+        self.bytes_buff.reserve_exact(next_chunk_size);
+
+        let spare_capacity_slice: &mut [u8] = unsafe {
+            transmute::<&mut [MaybeUninit<u8>], &mut [u8]>(self.bytes_buff.spare_capacity_mut())
+        };
+        let bytes_read = self.file.read(spare_capacity_slice)?;
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Loading next chunk: next_chunk_size {}, bytes_read {}",
+            next_chunk_size, bytes_read
+        );
+
+        unsafe { self.bytes_buff.set_len(self.bytes_buff.len() + bytes_read) };
+        self.file_read_bytes += bytes_read;
+
+        if self.bytes_buff.len() > self.bytes_buff.capacity() {
+            panic!("Error with loading next chunk");
+        }
+        return Ok(bytes_read);
+    }
+    fn is_finished_loading_file(&self) -> bool {
+        return self.file_read_bytes >= self.file_size as usize;
+    }
+    fn iter<'a>(&'a mut self) -> ReaderIter<'a> {
+        ReaderIter::new(self)
+    }
+}
+
+struct ReaderIter<'a> {
+    index: usize,
+    reader: &'a mut ChunkReader,
+}
+impl<'a> ReaderIter<'a> {
+    fn new(reader: &'a mut ChunkReader) -> ReaderIter<'a> {
+        ReaderIter { index: 0, reader }
+    }
+}
+
+impl<'a> Iterator for ReaderIter<'a> {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        // if the iterator is at the end of buffer read another data chunk from the file
+        if self.index == self.reader.bytes_buff.len() - 1 {
+            if self.reader.is_finished_loading_file() {
+                return None;
+            };
+            if self.reader.load_next_chunk().expect("Bytes read") == 0 {
+                return None;
+            }
+        }
+        let val = *self
+            .reader
+            .bytes_buff
+            .get(self.index)
+            .expect("bytes_buff get index");
+        self.index += 1;
+        return Some(val);
+    }
+}
+
 fn get_second_offset(
     first_offset: u16,
     attempt_count: &mut u16,
     max_attempts: u16,
-    bytes: &[u8],
+    byte_reader: &mut ChunkReader,
 ) -> Option<u8> {
-    {
-        let mut current_offset_left = first_offset;
-        let mut in_header = false;
-        loop {
-            for byte in bytes.iter() {
-                match byte {
-                    b'>' => {
-                        in_header = true;
-                        current_offset_left -= 1;
-                    }
-                    b'\n' => in_header = false,
-                    _ => {
-                        if in_header {
-                            if current_offset_left == 0 {
-                                return Some(*byte);
-                            }
-                            current_offset_left -= 1
+    // let mut index = 0;
+    let mut current_offset_left = first_offset;
+    let mut in_header = false;
+    loop {
+        for byte in byte_reader.iter() {
+            match byte {
+                b'>' => {
+                    in_header = true;
+                    current_offset_left -= 1;
+                }
+                b'\n' => in_header = false,
+                _ => {
+                    if in_header {
+                        if current_offset_left == 0 {
+                            return Some(byte);
                         }
+                        current_offset_left -= 1
                     }
                 }
             }
-            if current_offset_left > 0 {
-                *attempt_count += 1;
-                if *attempt_count >= max_attempts {
-                    eprintln!("Max attempts reached {}, cannot encrypt.", max_attempts);
-                    process::exit(1);
-                }
+        }
+        if current_offset_left > 0 {
+            *attempt_count += 1;
+            if *attempt_count >= max_attempts {
+                eprintln!("Max attempts reached {}, cannot encrypt.", max_attempts);
+                process::exit(1);
             }
         }
     }
@@ -114,7 +218,7 @@ fn get_second_offset(
 fn mutate_alpha_array(
     second_offset: u8,
     max_attempts: u16,
-    bytes: &[u8],
+    byte_reader: &mut ChunkReader,
     alpha_arr: &mut [u8; 26],
     attempt_count: &mut u16,
 ) -> AttemptsResult {
@@ -126,7 +230,7 @@ fn mutate_alpha_array(
         let mut current_offset_left2 = second_offset;
         let mut in_header = false;
         loop {
-            for byte in bytes.iter() {
+            for byte in byte_reader.iter() {
                 match byte {
                     b'>' => in_header = true,
                     b'\n' => in_header = false,
@@ -138,12 +242,12 @@ fn mutate_alpha_array(
                             continue;
                         };
                         if current_offset_left2 == 0 {
-                            if already_used_values.contains(byte) {
+                            if already_used_values.contains(&byte) {
                                 current_offset_left2 = second_offset;
                                 continue;
                             }
-                            already_used_values.insert(*byte);
-                            alpha_arr[next_item_alpha_arr_index] = *byte;
+                            already_used_values.insert(byte);
+                            alpha_arr[next_item_alpha_arr_index] = byte;
                             next_item_alpha_arr_index += 1;
                             match next_item_alpha_arr_index {
                                 1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
@@ -170,23 +274,28 @@ fn mutate_alpha_array(
 
 impl<'a> KeyFileData {
     fn fill_alpha_arr(&self, alpha_arr: &mut [u8; 26]) -> AttemptsResult {
-        // function body
+        let f = File::open(&self.key_path).unwrap();
+        let mut reader = ChunkReader::new(f);
         let mut attempt_count = 0;
-        let bytes = fs::read(&self.key_path).unwrap();
+
+        #[cfg(debug_assertions)]
+        println!("get_second_offset");
         let second_offset = match get_second_offset(
             self.first_offset,
             &mut attempt_count,
             self.max_attempts,
-            &bytes,
+            &mut reader,
         ) {
             Some(v) => v,
             None => return AttemptsResult::MaxReached,
         };
 
+        #[cfg(debug_assertions)]
+        println!("mutate_alpha_array");
         let max_attempts_reached = mutate_alpha_array(
             second_offset,
             self.max_attempts,
-            &bytes,
+            &mut reader,
             alpha_arr,
             &mut attempt_count,
         );

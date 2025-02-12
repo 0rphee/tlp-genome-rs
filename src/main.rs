@@ -80,22 +80,29 @@ impl<'a> KeyFileData {
             attempt_count: &mut u16,
             max_attempts: u16,
             bytes: &[u8],
-        ) -> Option<u8> {
+        ) -> Option<(u8, usize)> {
+            // returns (offset, index where we finished (in the .fasta file))
             {
                 let mut current_offset_left = first_offset;
                 let mut in_header = false;
                 loop {
-                    for byte in bytes.iter() {
+                    for (ix, byte) in bytes.iter().enumerate() {
                         match byte {
                             b'>' => {
                                 in_header = true;
                                 current_offset_left -= 1;
                             }
                             b'\n' => in_header = false,
+                            b'\r' => continue,
                             _ => {
                                 if in_header {
                                     if current_offset_left == 0 {
-                                        return Some(*byte);
+                                        #[cfg(debug_assertions)]
+                                        println!(
+                                            "last byte info get second offset: {:?}, {}",
+                                            *byte as char, ix
+                                        );
+                                        return Some((*byte, ix));
                                     }
                                     current_offset_left -= 1
                                 }
@@ -116,6 +123,7 @@ impl<'a> KeyFileData {
             second_offset: u8,
             max_attempts: u16,
             bytes: &[u8],
+            prev_ix: usize,
             alpha_arr: &mut [u8; 26],
             attempt_count: &mut u16,
         ) -> AttemptsResult {
@@ -123,55 +131,73 @@ impl<'a> KeyFileData {
             // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
             let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
             let mut next_item_alpha_arr_index = 0;
-            {
-                let mut current_offset_left2 = second_offset;
-                let mut in_header = false;
-                loop {
-                    for byte in bytes.iter() {
-                        match byte {
-                            b'>' => in_header = true,
-                            b'\n' => in_header = false,
-                            b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
-                                current_offset_left2 = second_offset;
-                            }
-                            _ => {
-                                if in_header {
-                                    continue;
-                                };
-                                if current_offset_left2 == 0 {
-                                    if already_used_values.contains(byte) {
-                                        current_offset_left2 = second_offset;
-                                        continue;
-                                    }
-                                    already_used_values.insert(*byte);
-                                    alpha_arr[next_item_alpha_arr_index] = *byte;
-                                    next_item_alpha_arr_index += 1;
-                                    match next_item_alpha_arr_index {
-                                        1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
-                                        25 => break,
-                                        _ => (),
-                                    }
+            let mut current_offset_left2 = second_offset;
+            let mut in_header = true;
+            let mut start_position = prev_ix;
+            loop {
+                let mut prev = if start_position > 0 {
+                    bytes[start_position - 1]
+                } else {
+                    0u8
+                };
+                for byte in bytes.iter().skip(start_position) {
+                    match byte {
+                        b'>' => in_header = true,
+                        b'\n' => in_header = false,
+                        b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
+                            current_offset_left2 = second_offset;
+                        }
+                        b'\r' => continue,
+                        _ => {
+                            if in_header {
+                                continue;
+                            };
+                            if current_offset_left2 == 0 {
+                                if already_used_values.contains(byte) {
                                     current_offset_left2 = second_offset;
+                                    continue;
                                 }
-                                current_offset_left2 -= 1
+                                #[cfg(debug_assertions)]
+                                println!(
+                                    "prev {:?} inserted {:?} offset at: {}",
+                                    prev as char, *byte as char, current_offset_left2
+                                );
+                                already_used_values.insert(*byte);
+                                alpha_arr[next_item_alpha_arr_index] = *byte;
+                                next_item_alpha_arr_index += 1;
+                                match next_item_alpha_arr_index {
+                                    1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
+                                    25 => break, // finished filling the array
+                                    _ => (),
+                                }
+                                current_offset_left2 = second_offset;
+                                continue;
                             }
+                            #[cfg(debug_assertions)]
+                            println!(
+                                "curr byte: {:?} offset at: {}",
+                                *byte as char, current_offset_left2
+                            );
+                            current_offset_left2 -= 1;
                         }
                     }
-                    if already_used_values.len() == 20 {
-                        return AttemptsResult::NotReached;
-                    } else {
-                        *attempt_count += 1;
-                        if *attempt_count >= max_attempts {
-                            return AttemptsResult::MaxReached;
-                        }
+                    prev = *byte;
+                }
+                if already_used_values.len() == 20 {
+                    return AttemptsResult::NotReached;
+                } else {
+                    *attempt_count += 1;
+                    if *attempt_count >= max_attempts {
+                        return AttemptsResult::MaxReached;
                     }
+                    start_position = 0;
                 }
             }
         }
         // function body
         let mut attempt_count = 0;
         let bytes = fs::read(&self.key_path).unwrap();
-        let second_offset = match get_second_offset(
+        let (second_offset, prev_ix) = match get_second_offset(
             self.first_offset,
             &mut attempt_count,
             self.max_attempts,
@@ -181,10 +207,13 @@ impl<'a> KeyFileData {
             None => return AttemptsResult::MaxReached,
         };
 
+        #[cfg(debug_assertions)]
+        println!("second_offset: {}", second_offset);
         let max_attempts_reached = mutate_alpha_array(
             second_offset,
             self.max_attempts,
             &bytes,
+            prev_ix,
             alpha_arr,
             &mut attempt_count,
         );
@@ -193,7 +222,7 @@ impl<'a> KeyFileData {
             let char_vec: Vec<_> = alpha_arr
                 .iter()
                 .enumerate()
-                .map(|(i, v)| (i, char::from(*v)))
+                .map(|(i, v)| ((i + 65) as u8 as char, char::from(*v)))
                 .collect();
             println!("Arr filled: {:?}", char_vec);
         }
@@ -203,12 +232,12 @@ impl<'a> KeyFileData {
 
 fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     fn writer_helper(writer: &mut BufWriter<File>, line: &str) {
-        if let Err(err) = writeln!(writer, "{}", line) {
+        if let Err(err) = write!(writer, "{}", line) {
             eprintln!("Failed to write to file: {}", err);
             process::exit(1);
         }
-        #[cfg(debug_assertions)]
-        println!("written line: {}", line);
+        // #[cfg(debug_assertions)]
+        // println!("written line: {}", line);
     }
     let mut alpha_arr: [u8; 26] = DEFAULT_ALPHA_ARR;
     let mut keyfile_vec: Vec<_> = Vec::new();
@@ -229,16 +258,21 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     });
     let mut cod_writer = BufWriter::new(cod_file);
 
-    let lines = bytes.lines().map(|v| v.trim());
+    let lines = bytes.split_inclusive('\n');
     for line in lines {
         if line.starts_with("#") {
             let splt: Vec<_> = line.splitn(3, ',').collect();
             let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
 
+            // #[cfg(debug_assertions)]
+            // println!("split vec: {:?}", splt);
             let key = KeyFileData {
                 key_path,
-                first_offset: splt[1].parse().unwrap(),
-                max_attempts: splt[2].parse().unwrap(),
+                first_offset: splt[1].parse().expect("first offset integer"),
+                max_attempts: splt[2]
+                    .trim_ascii_end()
+                    .parse()
+                    .expect("max attempts integer"),
             };
             #[cfg(debug_assertions)]
             println!("{:?}", key);
@@ -264,7 +298,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             let codified: String = upper
                 .bytes()
                 .map(|byte| -> char {
-                    if byte == b' ' {
+                    if byte.is_ascii_whitespace() {
                         byte.into()
                     } else {
                         // we assume every byte now is an ascii letter

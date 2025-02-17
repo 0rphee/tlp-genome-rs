@@ -97,8 +97,10 @@ impl ChunkReader {
     // chunk size used when reading a file into memory in parts
     // 1024 bytes = 1 KB
     // 124*25 = 3,100; 3100 / 1024
-    const CHUNK_SIZE: usize = 10 * 1024;
+    const CHUNK_SIZE: usize = 15 * 1024;
     fn new(file: File) -> ChunkReader {
+        #[cfg(debug_assertions)]
+        println!("New chunk reader");
         let file_size = file.metadata().expect("File size").len();
         let mut reader = ChunkReader {
             bytes_buff: Vec::with_capacity(0),
@@ -145,6 +147,9 @@ impl ChunkReader {
     fn iter<'a>(&'a mut self) -> ReaderIter<'a> {
         ReaderIter::new(self)
     }
+    fn iter_at<'a>(&'a mut self, index_start: usize) -> ReaderIter<'a> {
+        ReaderIter::new_at(self, index_start)
+    }
 }
 
 struct ReaderIter<'a> {
@@ -155,6 +160,12 @@ impl<'a> ReaderIter<'a> {
     fn new(reader: &'a mut ChunkReader) -> ReaderIter<'a> {
         ReaderIter { index: 0, reader }
     }
+    fn new_at(reader: &'a mut ChunkReader, index_start: usize) -> ReaderIter<'a> {
+        ReaderIter {
+            index: index_start,
+            reader,
+        }
+    }
 }
 
 impl<'a> Iterator for ReaderIter<'a> {
@@ -162,6 +173,11 @@ impl<'a> Iterator for ReaderIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         // if the iterator is at the end of buffer read another data chunk from the file
         if self.index == self.reader.bytes_buff.len() - 1 {
+            #[cfg(debug_assertions)]
+            println!(
+                "ReaderIter index at end of buffer: {} ix: {}",
+                self.reader.bytes_buff[self.index] as char, self.index
+            );
             if self.reader.is_finished_loading_file() {
                 return None;
             };
@@ -184,24 +200,27 @@ fn get_second_offset(
     attempt_count: &mut u16,
     max_attempts: u16,
     byte_reader: &mut ChunkReader,
-) -> Option<u8> {
+) -> Option<(u8, usize)> {
     // let mut index = 0;
-    let mut current_offset_left = first_offset;
+    let mut current_offset_left = 0;
     let mut in_header = false;
     loop {
-        for byte in byte_reader.iter() {
+        for (ix, byte) in byte_reader.iter().enumerate() {
             match byte {
                 b'>' => {
                     in_header = true;
-                    current_offset_left -= 1;
+                    current_offset_left += 1;
                 }
                 b'\n' => in_header = false,
+                b'\r' => continue,
                 _ => {
                     if in_header {
-                        if current_offset_left == 0 {
-                            return Some(byte);
+                        if current_offset_left == first_offset {
+                            #[cfg(debug_assertions)]
+                            println!("second offset {} ({}) at {}", byte as char, byte, ix);
+                            return Some((byte, ix));
                         }
-                        current_offset_left -= 1
+                        current_offset_left += 1
                     }
                 }
             }
@@ -217,6 +236,7 @@ fn get_second_offset(
 }
 fn mutate_alpha_array(
     second_offset: u8,
+    prev_ix: usize,
     max_attempts: u16,
     byte_reader: &mut ChunkReader,
     alpha_arr: &mut [u8; 26],
@@ -226,48 +246,66 @@ fn mutate_alpha_array(
     // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
     let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
     let mut next_item_alpha_arr_index = 0;
-    {
-        let mut current_offset_left2 = second_offset;
-        let mut in_header = false;
-        loop {
-            for byte in byte_reader.iter() {
-                match byte {
-                    b'>' => in_header = true,
-                    b'\n' => in_header = false,
-                    b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
-                        current_offset_left2 = second_offset;
-                    }
-                    _ => {
-                        if in_header {
+    let mut current_offset_left2 = 1;
+    let mut in_header = true;
+    let mut start_position = prev_ix;
+    loop {
+        for (ix, byte) in byte_reader.iter_at(start_position).enumerate() {
+            match byte {
+                b'>' => in_header = true,
+                b'\r' => continue,
+                b'\n' => in_header = false,
+                b'Z' | b'X' | b'J' | b'U' | b'O' | b'B' => {
+                    current_offset_left2 = 1;
+                }
+                _ => {
+                    if in_header {
+                        continue;
+                    };
+                    if current_offset_left2 == second_offset {
+                        if already_used_values.contains(&byte) {
+                            current_offset_left2 = 1;
                             continue;
-                        };
-                        if current_offset_left2 == 0 {
-                            if already_used_values.contains(&byte) {
-                                current_offset_left2 = second_offset;
-                                continue;
-                            }
-                            already_used_values.insert(byte);
-                            alpha_arr[next_item_alpha_arr_index] = byte;
-                            next_item_alpha_arr_index += 1;
-                            match next_item_alpha_arr_index {
-                                1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
-                                25 => break,
-                                _ => (),
-                            }
-                            current_offset_left2 = second_offset;
                         }
-                        current_offset_left2 -= 1
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "inserted: {} offset at: {}",
+                            byte as char, current_offset_left2
+                        );
+
+                        already_used_values.insert(byte);
+                        alpha_arr[next_item_alpha_arr_index] = byte;
+                        next_item_alpha_arr_index += 1;
+                        match next_item_alpha_arr_index {
+                            1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
+                            25 => {
+                                #[cfg(debug_assertions)]
+                                println!("End position: {} ({})", byte as char, ix);
+                                break;
+                            }
+                            _ => (),
+                        }
+                        current_offset_left2 = 1;
+                        continue;
                     }
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "curr byte: {} offset at: {}",
+                        byte as char, current_offset_left2
+                    );
+
+                    current_offset_left2 += 1
                 }
             }
-            if already_used_values.len() == 20 {
-                return AttemptsResult::NotReached;
-            } else {
-                *attempt_count += 1;
-                if *attempt_count >= max_attempts {
-                    return AttemptsResult::MaxReached;
-                }
+        }
+        if already_used_values.len() == 20 {
+            return AttemptsResult::NotReached;
+        } else {
+            *attempt_count += 1;
+            if *attempt_count >= max_attempts {
+                return AttemptsResult::MaxReached;
             }
+            start_position = 0;
         }
     }
 }
@@ -278,9 +316,7 @@ impl<'a> KeyFileData {
         let mut reader = ChunkReader::new(f);
         let mut attempt_count = 0;
 
-        #[cfg(debug_assertions)]
-        println!("get_second_offset");
-        let second_offset = match get_second_offset(
+        let (second_offset, prev_ix) = match get_second_offset(
             self.first_offset,
             &mut attempt_count,
             self.max_attempts,
@@ -294,6 +330,7 @@ impl<'a> KeyFileData {
         println!("mutate_alpha_array");
         let max_attempts_reached = mutate_alpha_array(
             second_offset,
+            prev_ix,
             self.max_attempts,
             &mut reader,
             alpha_arr,
@@ -314,12 +351,10 @@ impl<'a> KeyFileData {
 
 fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     fn writer_helper(writer: &mut BufWriter<File>, line: &str) {
-        if let Err(err) = writeln!(writer, "{}", line) {
+        if let Err(err) = write!(writer, "{}", line) {
             eprintln!("Failed to write to file: {}", err);
             process::exit(1);
         }
-        #[cfg(debug_assertions)]
-        println!("written line: {}", line);
     }
     let mut alpha_arr: [u8; 26] = DEFAULT_ALPHA_ARR;
 
@@ -339,7 +374,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     });
     let mut cod_writer = BufWriter::new(cod_file);
 
-    let lines = bytes.lines().map(|v| v.trim());
+    let lines = bytes.split_inclusive('\n');
     for line in lines {
         if line.starts_with("#") {
             let splt: Vec<_> = line.splitn(3, ',').collect();
@@ -347,8 +382,11 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
 
             let key = KeyFileData {
                 key_path,
-                first_offset: splt[1].parse().unwrap(),
-                max_attempts: splt[2].parse().unwrap(),
+                first_offset: splt[1].parse().expect("first offset integer"),
+                max_attempts: splt[2]
+                    .trim_ascii_end()
+                    .parse()
+                    .expect("max attemtps integer"),
             };
             #[cfg(debug_assertions)]
             println!("{:?}", key);
@@ -373,11 +411,11 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             let codified: String = upper
                 .bytes()
                 .map(|byte| -> char {
-                    if byte == b' ' {
-                        byte.into()
-                    } else {
+                    if byte.is_ascii_alphabetic() {
                         // we assume every byte now is an ascii letter
                         alpha_arr[(byte - b'A') as usize].into()
+                    } else {
+                        byte.into()
                     }
                 })
                 .collect();

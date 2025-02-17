@@ -1,3 +1,4 @@
+use core::panic;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -83,33 +84,33 @@ impl<'a> KeyFileData {
         ) -> Option<(u8, usize)> {
             // returns (offset, index where we finished (in the .fasta file))
             {
-                let mut current_offset_left = first_offset;
+                let mut current_offset = 0;
                 let mut in_header = false;
                 loop {
                     for (ix, byte) in bytes.iter().enumerate() {
                         match byte {
                             b'>' => {
                                 in_header = true;
-                                current_offset_left -= 1;
+                                current_offset += 1;
                             }
                             b'\n' => in_header = false,
                             b'\r' => continue,
                             _ => {
                                 if in_header {
-                                    if current_offset_left == 0 {
+                                    if current_offset == first_offset {
                                         #[cfg(debug_assertions)]
                                         println!(
-                                            "last byte info get second offset: {:?}, {}",
+                                            "last byte info get_second_offset: {:?}, {}",
                                             *byte as char, ix
                                         );
                                         return Some((*byte, ix));
                                     }
-                                    current_offset_left -= 1
+                                    current_offset += 1
                                 }
                             }
                         }
                     }
-                    if current_offset_left > 0 {
+                    if current_offset > first_offset {
                         *attempt_count += 1;
                         if *attempt_count >= max_attempts {
                             eprintln!("Max attempts reached {}, cannot encrypt.", max_attempts);
@@ -131,7 +132,7 @@ impl<'a> KeyFileData {
             // we only need to check the mappings for the 20 letters that don't have a fixed substitution value
             let mut already_used_values: HashSet<u8, _> = HashSet::with_capacity(20);
             let mut next_item_alpha_arr_index = 0;
-            let mut current_offset_left2 = second_offset;
+            let mut current_offset_left2 = 1;
             let mut in_header = true;
             let mut start_position = prev_ix;
             loop {
@@ -152,9 +153,9 @@ impl<'a> KeyFileData {
                             if in_header {
                                 continue;
                             };
-                            if current_offset_left2 == 0 {
+                            if current_offset_left2 == second_offset {
                                 if already_used_values.contains(byte) {
-                                    current_offset_left2 = second_offset;
+                                    current_offset_left2 = 1;
                                     continue;
                                 }
                                 #[cfg(debug_assertions)]
@@ -170,7 +171,7 @@ impl<'a> KeyFileData {
                                     25 => break, // finished filling the array
                                     _ => (),
                                 }
-                                current_offset_left2 = second_offset;
+                                current_offset_left2 = 1;
                                 continue;
                             }
                             #[cfg(debug_assertions)]
@@ -178,7 +179,7 @@ impl<'a> KeyFileData {
                                 "curr byte: {:?} offset at: {}",
                                 *byte as char, current_offset_left2
                             );
-                            current_offset_left2 -= 1;
+                            current_offset_left2 += 1;
                         }
                     }
                     prev = *byte;
@@ -264,11 +265,14 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             let splt: Vec<_> = line.splitn(3, ',').collect();
             let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
 
-            // #[cfg(debug_assertions)]
-            // println!("split vec: {:?}", splt);
+            let first_offset: u16 = match splt[1].parse().expect("first offset integer >= 0") {
+                a if a >= 1 => a,
+                _ => panic!("first offset integer must be >= 0"),
+            };
+
             let key = KeyFileData {
                 key_path,
-                first_offset: splt[1].parse().expect("first offset integer"),
+                first_offset,
                 max_attempts: splt[2]
                     .trim_ascii_end()
                     .parse()
@@ -298,11 +302,11 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             let codified: String = upper
                 .bytes()
                 .map(|byte| -> char {
-                    if byte.is_ascii_whitespace() {
-                        byte.into()
-                    } else {
+                    if byte.is_ascii_alphabetic() {
                         // we assume every byte now is an ascii letter
                         alpha_arr[(byte - b'A') as usize].into()
+                    } else {
+                        byte.into()
                     }
                 })
                 .collect();

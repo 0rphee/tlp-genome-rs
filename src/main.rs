@@ -224,7 +224,7 @@ fn get_second_offset(
                 }
             }
         }
-        if current_offset_left > 0 {
+        if current_offset_left <= first_offset {
             *attempt_count += 1;
             if *attempt_count >= max_attempts {
                 eprintln!("Max attempts reached {}, cannot encrypt.", max_attempts);

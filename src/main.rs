@@ -178,6 +178,7 @@ impl<'a> Iterator for ReaderIter<'a> {
                 "ReaderIter index at end of buffer: {} ix: {}",
                 self.reader.bytes_buff[self.index] as char, self.index
             );
+
             if self.reader.is_finished_loading_file() {
                 return None;
             };
@@ -201,15 +202,13 @@ fn get_second_offset(
     max_attempts: u16,
     byte_reader: &mut ChunkReader,
 ) -> Option<(u8, usize)> {
-    // let mut index = 0;
-    let mut current_offset_left = 0;
+    let mut current_offset_left = 1;
     let mut in_header = false;
     loop {
         for (ix, byte) in byte_reader.iter().enumerate() {
             match byte {
                 b'>' => {
                     in_header = true;
-                    current_offset_left += 1;
                 }
                 b'\n' => in_header = false,
                 b'\r' => continue,

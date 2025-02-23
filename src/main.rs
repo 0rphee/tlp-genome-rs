@@ -68,6 +68,7 @@ struct KeyFileData {
     first_offset: u16,
     key_path: PathBuf,
     max_attempts: u16,
+    lines_encrypted: u32,
 }
 
 #[derive(Debug)]
@@ -309,7 +310,7 @@ fn mutate_alpha_array(
     }
 }
 
-impl<'a> KeyFileData {
+impl KeyFileData {
     fn fill_alpha_arr(&self, alpha_arr: &mut [u8; 26]) -> AttemptsResult {
         let f = File::open(&self.key_path).unwrap();
         let mut reader = ChunkReader::new(f);
@@ -346,6 +347,20 @@ impl<'a> KeyFileData {
         }
         return max_attempts_reached;
     }
+    // TODO: #file.fasta,offset1,extraOffset,linesWithCurrFasta
+    // #file.fasta,offset1,linesWithCurrFasta
+    // if the file.fasta is the last one, linesWithCurrFasta=0, to follow the blackboard example
+    fn to_instructions_to_decode(&self) -> String {
+        format!(
+            "#{},{},{}",
+            self.key_path
+                .file_name()
+                .expect("key_path valid filename")
+                .to_string_lossy(),
+            self.first_offset,
+            self.lines_encrypted
+        )
+    }
 }
 
 fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
@@ -372,10 +387,27 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
         process::exit(1);
     });
     let mut cod_writer = BufWriter::new(cod_file);
+    //
+    // Create Instructions_to_decode.txt file
+    let instructions_to_decode_filepath =
+        source_filepath.with_file_name("Instructions_to_decode.txt");
+    let instructions_to_decode_file = File::create(&instructions_to_decode_filepath)
+        .unwrap_or_else(|err| {
+            eprintln!("Failed to create output file: {}", err);
+            process::exit(1);
+        });
+    let mut itd_writer = BufWriter::new(instructions_to_decode_file);
 
+    let mut instructions_to_decode_vec: Vec<KeyFileData> = Vec::new();
+    let mut line_number_current_fasta = 0;
     let lines = bytes.split_inclusive('\n');
     for line in lines {
         if line.starts_with("#") {
+            if let Some(k) = instructions_to_decode_vec.last_mut() {
+                k.lines_encrypted = line_number_current_fasta;
+                line_number_current_fasta = 0;
+            }
+
             let splt: Vec<_> = line.splitn(3, ',').collect();
             let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
 
@@ -386,6 +418,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
                     .trim_ascii_end()
                     .parse()
                     .expect("max attemtps integer"),
+                lines_encrypted: 0,
             };
             #[cfg(debug_assertions)]
             println!("{:?}", key);
@@ -394,9 +427,12 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
                 eprintln!("Max attempts reached, cannot encrypt.");
                 process::exit(1);
             }
-            writer_helper(&mut mod_writer, line);
-            writer_helper(&mut cod_writer, line);
+            // don't write '#' lines
+            // writer_helper(&mut mod_writer, line);
+            // writer_helper(&mut cod_writer, line);
+            instructions_to_decode_vec.push(key);
         } else {
+            line_number_current_fasta += 1;
             let upper: String = line
                 .chars()
                 .filter_map(|c| {
@@ -422,8 +458,18 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             writer_helper(&mut cod_writer, &codified);
         }
     }
+    for item in instructions_to_decode_vec {
+        if let Err(err) = writeln!(&mut itd_writer, "{}", item.to_instructions_to_decode()) {
+            eprintln!("Failed to write to file: {}", err);
+            process::exit(1);
+        }
+    }
     // Flush buffer to ensure all data is written to the file
-    if let Err(err) = mod_writer.flush() {
+    if let Err(err) = mod_writer
+        .flush()
+        .and_then(|()| cod_writer.flush())
+        .and_then(|()| itd_writer.flush())
+    {
         eprintln!("Failed to flush buffer: {}", err);
         process::exit(1);
     }

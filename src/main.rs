@@ -250,7 +250,7 @@ fn mutate_alpha_array(
     let mut in_header = true;
     let mut start_position = prev_ix;
     loop {
-        for (ix, byte) in byte_reader.iter_at(start_position).enumerate() {
+        for (_ix, byte) in byte_reader.iter_at(start_position).enumerate() {
             match byte {
                 b'>' => in_header = true,
                 b'\r' => continue,
@@ -280,7 +280,7 @@ fn mutate_alpha_array(
                             1 | 9 | 14 | 20 | 23 => next_item_alpha_arr_index += 1,
                             25 => {
                                 #[cfg(debug_assertions)]
-                                println!("End position: {} ({})", byte as char, ix);
+                                println!("End position: {} ({})", byte as char, _ix);
                                 break;
                             }
                             _ => (),
@@ -409,7 +409,10 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             }
 
             let splt: Vec<_> = line.splitn(3, ',').collect();
-            let key_path = source_filepath.parent().unwrap().join(&splt[0][1..]);
+            let key_path = source_filepath
+                .parent()
+                .expect("fasta file path")
+                .join(&splt[0][1..]);
 
             let first_offset: u16 = match splt[1].parse().expect("first offset integer >= 0") {
                 a if a >= 1 => a,
@@ -418,7 +421,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
 
             let key = KeyFileData {
                 key_path,
-                first_offset: splt[1].parse().expect("first offset integer"),
+                first_offset,
                 max_attempts: splt[2]
                     .trim_ascii_end()
                     .parse()

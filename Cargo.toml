@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 
+[features]
+default = ["mod-file"]
+mod-file= []
+
 [profile.profiling]
 inherits = "release"
 debug = true

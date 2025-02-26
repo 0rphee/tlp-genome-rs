@@ -373,12 +373,15 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
     }
     let mut alpha_arr: [u8; 26] = DEFAULT_ALPHA_ARR;
 
+    #[cfg(feature = "mod-file")]
     // Create .mod file (uppercase & without punctuation)
     let mod_filepath = source_filepath.with_extension("mod");
+    #[cfg(feature = "mod-file")]
     let mod_file = File::create(&mod_filepath).unwrap_or_else(|err| {
         eprintln!("Failed to create output file: {}", err);
         process::exit(1);
     });
+    #[cfg(feature = "mod-file")]
     let mut mod_writer = BufWriter::new(mod_file);
 
     // Create .cod file (substituded letters from array)
@@ -463,6 +466,7 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
                     }
                 })
                 .collect();
+            #[cfg(feature = "mod-file")]
             writer_helper(&mut mod_writer, &upper);
             writer_helper(&mut cod_writer, &codified);
         }
@@ -473,12 +477,18 @@ fn encrypt_bytes(source_filepath: &Path, bytes: String) -> () {
             process::exit(1);
         }
     }
-    // Flush buffer to ensure all data is written to the file
-    if let Err(err) = mod_writer
+
+    #[cfg(not(feature = "mod-file"))]
+    let e = cod_writer.flush().and_then(|()| itd_writer.flush());
+
+    #[cfg(feature = "mod-file")]
+    let e = mod_writer
         .flush()
         .and_then(|()| cod_writer.flush())
-        .and_then(|()| itd_writer.flush())
-    {
+        .and_then(|()| itd_writer.flush());
+
+    // Flush buffer to ensure all data is written to the file
+    if let Err(err) = e {
         eprintln!("Failed to flush buffer: {}", err);
         process::exit(1);
     }

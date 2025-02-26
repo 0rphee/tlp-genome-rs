@@ -1,2 +1,2 @@
-#File1.fasta,12,20,30
-#File2.fasta,10,20,0
+#File1.fasta,10,2,29
+#File2.fasta,15,2,0

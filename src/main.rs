@@ -97,7 +97,7 @@ impl ChunkReader {
     //   ex. 'python3 test.py data/uniprot_sprot_varsplic.fasta'
     // chunk size used when reading a file into memory in parts
     // 1024 bytes = 1 KB
-    // 124*25 = 3,100; 3100 / 1024
+    // 1024*15 = 15,360 bytes
     const CHUNK_SIZE: usize = 15 * 1024;
     fn new(file: File) -> ChunkReader {
         #[cfg(debug_assertions)]
@@ -352,12 +352,13 @@ impl KeyFileData {
     // if the file.fasta is the last one, linesWithCurrFasta=0, to follow the blackboard example
     fn to_instruction_to_decode(&self) -> String {
         format!(
-            "#{},{},{}",
+            "#{},{},{},{}",
             self.key_path
                 .file_name()
                 .expect("key_path valid filename")
                 .to_string_lossy(),
             self.first_offset,
+            self.max_attempts,
             self.lines_encrypted
         )
     }
